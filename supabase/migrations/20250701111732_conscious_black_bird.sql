@@ -1,0 +1,1 @@
+ALTER POLICY "crud-authenticated-policy-select" ON "organisation_memberships" TO authenticated USING (true);
