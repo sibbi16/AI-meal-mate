@@ -27,8 +27,12 @@ export async function POST(request: NextRequest) {
       startDate = new Date();
     }
     
+    // Calculate end date: start + (days - 1)
+    // For 4 days: Day 0, Day 1, Day 2, Day 3 = start + 3
     const endDate = new Date(startDate);
     endDate.setDate(startDate.getDate() + (days - 1));
+    
+    console.log(`[Date Range] Start: ${startDate.toDateString()}, End: ${endDate.toDateString()}, Days: ${days}`);
 
     // Prepare recipe names for Gemini
     const recipeTitles = Array.isArray(recipes)
@@ -52,6 +56,9 @@ export async function POST(request: NextRequest) {
 
     const service = getGeminiService();
     const mealPlanText = await service.generateMealPlan(seedRecipes, days);
+
+    console.log(`[Meal Plan] Generating ${days}-day plan`);
+    console.log('[Meal Plan] Generated text:', mealPlanText.substring(0, 500));
 
     // Parse the meal plan text and structure it
     const mealPlan = parseMealPlanText(mealPlanText, startDate, endDate, days);
@@ -92,35 +99,50 @@ export async function POST(request: NextRequest) {
 function parseMealPlanText(mealPlanText: string, startDate: Date, endDate: Date, numberOfDays: number = 7) {
   const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
   
+  console.log(`[Parser] Creating ${numberOfDays} days starting from ${startDate.toDateString()} to ${endDate.toDateString()}`);
+  
+  // ALWAYS use the requested numberOfDays (ignore endDate calculation)
+  const daysToCreate = numberOfDays;
+  console.log(`[Parser] Will create exactly ${daysToCreate} days`);
+  
   // Split the meal plan by days
   const lines = mealPlanText.split('\n').filter(line => line.trim());
   
-  const days = Array.from({ length: numberOfDays }, (_, i) => {
+  const days = Array.from({ length: daysToCreate }, (_, i) => {
     const date = new Date(startDate);
     date.setDate(startDate.getDate() + i);
     
     // Try to extract meals from the text for this day
     const dayName = dayNames[date.getDay()];
+    
+    const breakfast = extractMealFromText(mealPlanText, dayName, 'breakfast') || 'Breakfast';
+    const lunch = extractMealFromText(mealPlanText, dayName, 'lunch') || 'Lunch';
+    const dinner = extractMealFromText(mealPlanText, dayName, 'dinner') || 'Dinner';
+    
+    console.log(`[Parser] Day ${i + 1} (${dayName}): B=${breakfast}, L=${lunch}, D=${dinner}`);
+    
     return {
       day: dayName,
       date: date.toISOString(),
       meals: {
         breakfast: {
-          name: extractMealFromText(mealPlanText, dayName, 'breakfast') || 'Breakfast',
+          name: breakfast,
           description: 'Delicious morning meal'
         },
         lunch: {
-          name: extractMealFromText(mealPlanText, dayName, 'lunch') || 'Lunch',
+          name: lunch,
           description: 'Satisfying midday meal'
         },
         dinner: {
-          name: extractMealFromText(mealPlanText, dayName, 'dinner') || 'Dinner',
+          name: dinner,
           description: 'Hearty evening meal'
         }
       }
     };
   });
 
+  console.log(`[Parser] Created ${days.length} day objects`);
+  
   return {
     id: Date.now().toString(),
     weekStartDate: startDate.toISOString(),

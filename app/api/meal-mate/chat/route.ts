@@ -14,7 +14,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Check if this is a meal plan request
-    const mealPlanKeywords = ['meal plan', 'weekly plan', 'week', 'plan for', 'create plan', 'generate plan', 'create for'];
+    const mealPlanKeywords = ['meal plan', 'weekly plan', 'week', 'plan for', 'create plan', 'generate plan', 'create for','days'];
     const isMealPlanRequest = mealPlanKeywords.some(keyword => 
       message.toLowerCase().includes(keyword)
     );
@@ -24,8 +24,19 @@ export async function POST(request: NextRequest) {
     
     if ((isMealPlanRequest || createWithDaysMatch) && recipeCount !== undefined) {
       // Extract number of days from message
-      const daysMatch = message.match(/(\d+)\s*days?/i);
-      const numberOfDays = daysMatch ? parseInt(daysMatch[1]) : null;
+      let numberOfDays: number | null = null;
+      
+      // Check for "X week(s)" pattern
+      const weeksMatch = message.match(/(\d+)\s*weeks?/i);
+      if (weeksMatch) {
+        numberOfDays = parseInt(weeksMatch[1]) * 7;
+      } else {
+        // Check for "X day(s)" pattern
+        const daysMatch = message.match(/(\d+)\s*days?/i);
+        if (daysMatch) {
+          numberOfDays = parseInt(daysMatch[1]);
+        }
+      }
 
       // Extract start date from message (e.g., "from Oct 10", "starting Oct 10", "from 10/10")
       const startDateMatch = message.match(/(?:from|starting|start)\s+(?:(\d{1,2}\/\d{1,2}(?:\/\d{2,4})?)|([A-Za-z]+\s+\d{1,2}))/i);
@@ -38,8 +49,9 @@ export async function POST(request: NextRequest) {
         }
       }
 
-      // If user has existing plan and not explicitly saying "new", ask what to do
-      if (hasExistingPlan && !message.toLowerCase().includes('new') && !message.toLowerCase().includes('edit')) {
+      // If user has existing plan and not explicitly saying "new" or "edit", ask what to do
+      // Also skip this check if they're providing days (means they already decided)
+      if (hasExistingPlan && !message.toLowerCase().includes('new') && !message.toLowerCase().includes('edit') && !numberOfDays) {
         return NextResponse.json({
           message: `You already have a meal plan. Would you like to:\n\n1. **Edit** the existing meal plan\n2. Create a **new** meal plan\n\nPlease let me know!`,
           needsAction: true
@@ -81,8 +93,20 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    // Check if user is responding with just a number (answering the "how many days" question)
+    // Check if user is responding with just a number or "X week(s)" (answering the "how many days" question)
     const numberOnlyMatch = message.match(/^(\d+)\s*(?:days?)?$/i);
+    const weekOnlyMatch = message.match(/^(\d+)\s*weeks?$/i);
+    
+    if (weekOnlyMatch && recipeCount !== undefined) {
+      const weeks = parseInt(weekOnlyMatch[1]);
+      const days = weeks * 7;
+      return NextResponse.json({
+        message: `Perfect! I'll create a ${days}-day meal plan for you. Generating now...`,
+        shouldGenerate: true,
+        numberOfDays: days
+      });
+    }
+    
     if (numberOnlyMatch && recipeCount !== undefined) {
       const days = parseInt(numberOnlyMatch[1]);
       return NextResponse.json({

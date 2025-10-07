@@ -129,6 +129,23 @@ User request: ${userPrompt}`;
   }
 
   private async generateFromImage(base64: string, mimeType: string): Promise<string> {
+    // Use JSON mode for structured output (like Python version)
+    const jsonPrompt = `You are a professional chef. Extract the recipe from this image and return a JSON object with this exact structure:
+
+{
+  "recipe_name": "string - name of the recipe",
+  "ingredients": ["array of strings - each ingredient with measurements"],
+  "steps": ["array of strings - numbered cooking instructions"],
+  "duration": "string - total cooking time like '30 minutes' or '1 hour'"
+}
+
+IMPORTANT:
+- Return ONLY valid JSON, nothing else
+- Extract ALL ingredients from the image
+- Extract ALL steps from the image
+- Do not summarize or skip any items
+- Make sure arrays are complete`;
+
     const result = await this.model.generateContent({
       contents: [
         {
@@ -140,7 +157,7 @@ User request: ${userPrompt}`;
                 mimeType
               }
             },
-            { text: this.getRecipeFormatPrompt() }
+            { text: jsonPrompt }
           ]
         }
       ]
@@ -181,17 +198,24 @@ User request: ${userPrompt}`;
 
   private parseRecipeResponse(rawText: string): Recipe {
     const cleaned = rawText.trim();
+    console.log('[Recipe Parser] Raw response:', cleaned.substring(0, 200));
+    
+    // Try JSON parsing first (primary method - like Python version)
     const jsonSection = this.extractJson(cleaned);
-
     if (jsonSection) {
       try {
         const parsed = JSON.parse(jsonSection) as RawRecipeResponse;
+        console.log('[Recipe Parser] Successfully parsed JSON');
+        console.log('[Recipe Parser] Ingredients count:', parsed.ingredients?.length);
+        console.log('[Recipe Parser] Steps count:', parsed.steps?.length);
         return this.transformRecipe(parsed);
       } catch (error) {
-        console.warn('Gemini returned invalid JSON, falling back to regex parsing.', error);
+        console.warn('[Recipe Parser] JSON parsing failed, trying text parsing:', error);
       }
     }
 
+    // Fallback to text parsing
+    console.log('[Recipe Parser] Using text parsing fallback');
     return this.parseRecipeFromFormattedText(cleaned);
   }
 
@@ -262,13 +286,32 @@ User request: ${userPrompt}`;
   }
 
   private extractJson(text: string): string | null {
+    // Try code fence first
     const fenceMatch = text.match(/```json\s*([\s\S]*?)```/i);
     if (fenceMatch) {
+      console.log('[JSON Extractor] Found JSON in code fence');
       return fenceMatch[1].trim();
     }
 
-    const plainMatch = text.match(/\{[\s\S]*\}/);
-    return plainMatch ? plainMatch[0] : null;
+    // Try plain code fence
+    const plainFenceMatch = text.match(/```\s*([\s\S]*?)```/);
+    if (plainFenceMatch) {
+      const content = plainFenceMatch[1].trim();
+      if (content.startsWith('{')) {
+        console.log('[JSON Extractor] Found JSON in plain code fence');
+        return content;
+      }
+    }
+
+    // Try to find JSON object in text
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      console.log('[JSON Extractor] Found JSON object in text');
+      return jsonMatch[0];
+    }
+
+    console.log('[JSON Extractor] No JSON found');
+    return null;
   }
 
   private async extractRecipeFromUrl(url: string): Promise<Recipe | null> {
