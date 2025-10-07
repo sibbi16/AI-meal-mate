@@ -7,7 +7,7 @@ const DEFAULT_HEADERS = {
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36'
 };
 
-const DEFAULT_MODEL = process.env.GEMINI_MODEL || 'gemini-2.0-flash';
+const DEFAULT_MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
 
 async function fetchWithTimeout(input: RequestInfo | URL, init: RequestInit = {}, timeout = 10000) {
   const controller = new AbortController();
@@ -41,7 +41,7 @@ export class GeminiService {
       model: DEFAULT_MODEL,
       generationConfig: {
         temperature: 0.3,
-        maxOutputTokens: 2048
+        maxOutputTokens: 4096  // Increased to allow complete recipe extraction
       }
     });
   }
@@ -84,12 +84,12 @@ export class GeminiService {
     };
   }
 
-  async generateMealPlan(recipes: string[]): Promise<string> {
+  async generateMealPlan(recipes: string[], numberOfDays: number = 7): Promise<string> {
     if (!recipes.length) {
       throw new Error('No recipes provided for meal plan generation.');
     }
 
-    const prompt = this.buildMealPlanPrompt(recipes);
+    const prompt = this.buildMealPlanPrompt(recipes, numberOfDays);
     return this.generateFromText(prompt);
   }
 
@@ -110,10 +110,10 @@ Respond conversationally and helpfully. Keep the tone friendly and concise. Enco
   private async generateFromStructuredPrompt(userPrompt: string): Promise<string> {
     const prompt = `You are a professional chef. Using the user request below, produce a JSON object with this exact shape:
 {
-  "recipe_name": string,
-  "ingredients": string[],
-  "steps": string[],
-  "duration": string
+  "recipe_name": string (name of the recipe),
+  "ingredients": array of strings (each ingredient with measurements),
+  "steps": array of strings (numbered cooking instructions),
+  "duration": string (total cooking time like "30 minutes" or "1 hour")
 }
 
 Rules:
@@ -121,6 +121,7 @@ Rules:
 - Each ingredient must include quantities when possible.
 - Steps must be detailed instructions.
 - Duration must be a total time string like "30 minutes".
+- Make sure the JSON is valid and complete.
 
 User request: ${userPrompt}`;
 
@@ -241,18 +242,23 @@ User request: ${userPrompt}`;
   }
 
   private extractListSection(text: string, sectionTitle: string): string[] {
-    const regex = new RegExp(`${sectionTitle}:?\\n([\\s\\S]*?)(?:\\n\\n|$|^[A-Z ]+:)`, 'im');
+    // More flexible regex to capture everything until next major section
+    const regex = new RegExp(`${sectionTitle}:?[\\s]*\\n([\\s\\S]*?)(?=\\n\\n[A-Z]+:|\\nCRITICAL|\\nIMPORTANT|$)`, 'i');
     const match = text.match(regex);
     if (!match || !match[1]) {
+      console.log(`No match found for section: ${sectionTitle}`);
       return [];
     }
 
-    return match[1]
+    const items = match[1]
       .split('\n')
       .map((line) => line.trim())
       .filter((line) => line.length > 0)
       .map((line) => line.replace(/^[-*•\d.\s]+/, '').trim())
       .filter(Boolean);
+    
+    console.log(`Extracted ${items.length} items from ${sectionTitle}:`, items);
+    return items;
   }
 
   private extractJson(text: string): string | null {
@@ -393,41 +399,61 @@ User request: ${userPrompt}`;
   }
 
   private getRecipeFormatPrompt(): string {
-    return `You are a professional chef. Generate a detailed recipe and format it EXACTLY as shown below. Do not deviate from this format:
+    return `You are a professional chef. Extract the COMPLETE recipe from this image. List EVERY SINGLE ingredient and EVERY SINGLE step.
+
+Format EXACTLY as shown:
 
 RECIPE NAME: [Name of the recipe]
 
 DURATION: [Total time like "30 minutes" or "1 hour 30 minutes"]
 
 INGREDIENTS:
-- [First ingredient with exact measurements]
-- [Second ingredient with exact measurements]
-- [Continue with each ingredient on a separate line starting with dash]
+- [Ingredient 1 with measurements]
+- [Ingredient 2 with measurements]
+- [Ingredient 3 with measurements]
+- [Ingredient 4 with measurements]
+- [Ingredient 5 with measurements]
+- [List EVERY ingredient you see in the image]
+- [Do NOT stop at 1 or 2 ingredients]
+- [Continue until ALL ingredients are listed]
 
 STEPS:
-1. [First step with detailed instructions]
-2. [Second step with detailed instructions]
-3. [Continue with numbered steps]
+1. [Step 1 with detailed instructions]
+2. [Step 2 with detailed instructions]
+3. [Step 3 with detailed instructions]
+4. [Step 4 with detailed instructions]
+5. [Step 5 with detailed instructions]
+6. [List EVERY step you see in the image]
+7. [Do NOT stop at 1 or 2 steps]
+8. [Continue until ALL steps are listed]
 
-CRITICAL: Follow this exact format. Do not add extra text, explanations, or formatting outside these sections.`;
+IMPORTANT:
+- Count the ingredients in the image and list them ALL
+- Count the steps in the image and list them ALL
+- If you see 8 ingredients, write all 8
+- If you see 6 steps, write all 6
+- DO NOT SUMMARIZE - extract everything exactly as shown
+- Be complete and thorough`;
   }
 
-  private buildMealPlanPrompt(recipes: string[]): string {
+  private buildMealPlanPrompt(recipes: string[], numberOfDays: number = 7): string {
     const recipeList = recipes.join(', ');
-    return `Create a comprehensive weekly meal plan using these recipes: ${recipeList}.
+    const dayNames = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+    
+    // Generate day list based on numberOfDays
+    const daysList = Array.from({ length: numberOfDays }, (_, i) => {
+      const dayName = i < 7 ? dayNames[i] : `Day ${i + 1}`;
+      return `   - ${dayName}: Breakfast, Lunch, Dinner`;
+    }).join('\n');
 
-Please create a detailed 7-day meal plan that includes:
+    return `Create a comprehensive ${numberOfDays}-day meal plan using these recipes: ${recipeList}.
+
+Please create a detailed ${numberOfDays}-day meal plan that includes:
 
 1. RECIPE LIST: ${recipeList}
 
-2. WEEKLY MEAL PLAN:
-   - Monday: Breakfast, Lunch, Dinner, Snacks
-   - Tuesday: Breakfast, Lunch, Dinner, Snacks
-   - Wednesday: Breakfast, Lunch, Dinner, Snacks
-   - Thursday: Breakfast, Lunch, Dinner, Snacks
-   - Friday: Breakfast, Lunch, Dinner, Snacks
-   - Saturday: Breakfast, Lunch, Dinner, Snacks
-   - Sunday: Breakfast, Lunch, Dinner, Snacks
+2. ${numberOfDays}-DAY MEAL PLAN:
+${daysList}
 
 3. MEAL PREP TIPS:
    - Suggestions for preparing meals in advance
@@ -436,14 +462,14 @@ Please create a detailed 7-day meal plan that includes:
 
 4. SHOPPING LIST:
    - Organized by food categories
-   - Quantities for the entire week
+   - Quantities for the entire ${numberOfDays}-day period
 
 5. NUTRITIONAL NOTES:
    - Key nutrients and health benefits
    - Portion size recommendations
    - Dietary considerations
 
-Make sure to incorporate the provided recipes throughout the week in a balanced and practical way.`;
+Make sure to incorporate the provided recipes throughout the ${numberOfDays} days in a balanced and practical way.`;
   }
 }
 

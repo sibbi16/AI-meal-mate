@@ -124,7 +124,7 @@ export function MealMateClient({ user }: MealMateClientProps) {
         return;
       }
 
-      // Check if user is asking for a meal plan
+      // Check if user is asking for a meal plan or answering meal plan questions
       const mealPlanKeywords = ['meal plan', 'weekly plan', 'week', 'plan for', 'create plan', 'generate plan'];
       const isMealPlanRequest = mealPlanKeywords.some(keyword => 
         message.toLowerCase().includes(keyword)
@@ -136,25 +136,26 @@ export function MealMateClient({ user }: MealMateClientProps) {
           return;
         }
 
-        addMessage('assistant', '🎨 Creating your personalized weekly meal plan...');
-        
-        const response = await fetch('/api/meal-mate/generate-plan', {
+        // Use chat API to handle conversational meal planning
+        const response = await fetch('/api/meal-mate/chat', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ 
-            userMessage: message,
-            userId: user?.id
+            message,
+            userId: user?.id,
+            recipeCount: savedRecipes.length,
+            hasExistingPlan: currentMealPlan !== null
           })
         });
 
-        if (!response.ok) throw new Error('Failed to generate meal plan');
+        if (!response.ok) throw new Error('Failed to get response');
 
         const data = await response.json();
-        
-        if (data.mealPlan) {
-          setCurrentMealPlan(data.mealPlan);
-          addMessage('assistant', '✨ Your weekly meal plan is ready! Check the Meal Plan tab to see it.');
-          setActiveTab('meal-plan');
+        addMessage('assistant', data.message);
+
+        // If AI says to generate, trigger generation
+        if (data.shouldGenerate) {
+          await handleGenerateMealPlan(data.numberOfDays || 7, data.startDate);
         }
         return;
       }
@@ -186,6 +187,33 @@ export function MealMateClient({ user }: MealMateClientProps) {
         return;
       }
 
+      // Check if user is responding with a number or "edit"/"new" (for meal plan days)
+      const numberOnlyMatch = message.match(/^(\d+)\s*(?:days?)?$/i);
+      const isEditOrNew = message.toLowerCase().includes('edit') || message.toLowerCase().includes('new');
+      
+      if ((numberOnlyMatch || isEditOrNew) && savedRecipes.length > 0) {
+        const response = await fetch('/api/meal-mate/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ 
+            message,
+            userId: user?.id,
+            recipeCount: savedRecipes.length,
+            hasExistingPlan: currentMealPlan !== null
+          })
+        });
+
+        if (!response.ok) throw new Error('Failed to get response');
+
+        const data = await response.json();
+        addMessage('assistant', data.message);
+
+        if (data.shouldGenerate) {
+          await handleGenerateMealPlan(data.numberOfDays || 7, data.startDate);
+        }
+        return;
+      }
+
       // General conversation
       const response = await fetch('/api/meal-mate/chat', {
         method: 'POST',
@@ -205,6 +233,45 @@ export function MealMateClient({ user }: MealMateClientProps) {
       addMessage('assistant', 'Sorry, I encountered an error. Please try again!');
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const handleGenerateMealPlan = async (numberOfDays: number = 7, startDate?: string | null) => {
+    setIsGeneratingPlan(true);
+    const dateInfo = startDate ? ` starting from ${new Date(startDate).toLocaleDateString()}` : '';
+    const toastId = toast.loading(`Generating your ${numberOfDays}-day meal plan${dateInfo}...`);
+
+    try {
+      addMessage('assistant', `🎨 Creating your personalized ${numberOfDays}-day meal plan${dateInfo} using your saved recipes...`);
+      
+      const response = await fetch('/api/meal-mate/generate-plan', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          userMessage: `Create a meal plan for ${numberOfDays} days${dateInfo}`,
+          userId: user?.id,
+          recipes: savedRecipes,
+          numberOfDays,
+          startDate
+        })
+      });
+
+      if (!response.ok) throw new Error('Failed to generate meal plan');
+
+      const data = await response.json();
+      
+      if (data.mealPlan) {
+        setCurrentMealPlan(data.mealPlan);
+        toast.success(`${numberOfDays}-day meal plan created successfully!`, { id: toastId });
+        addMessage('assistant', `✨ Your ${numberOfDays}-day meal plan is ready! Check the Meal Plan tab to see it.`);
+        setActiveTab('meal-plan');
+      }
+    } catch (error) {
+      console.error('Error:', error);
+      toast.error('Failed to generate meal plan. Please try again.', { id: toastId });
+      addMessage('assistant', 'Sorry, I encountered an error creating the meal plan. Please try again!');
+    } finally {
+      setIsGeneratingPlan(false);
     }
   };
 

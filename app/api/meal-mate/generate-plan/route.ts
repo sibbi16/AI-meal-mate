@@ -7,14 +7,28 @@ interface RecipeSummary {
 
 export async function POST(request: NextRequest) {
   try {
-    const { userMessage, recipes } = await request.json();
+    const { userMessage, recipes, numberOfDays, startDate: providedStartDate } = await request.json();
 
-    // Get the current week's date range
-    const today = new Date();
-    const startDate = new Date(today);
-    startDate.setDate(today.getDate() - today.getDay()); // Start from Sunday
+    // Extract number of days from message or use provided value
+    let days = numberOfDays;
+    if (!days && typeof userMessage === 'string') {
+      const daysMatch = userMessage.match(/(\d+)\s*days?/i);
+      days = daysMatch ? parseInt(daysMatch[1]) : 7; // Default to 7 days
+    }
+    if (!days) days = 7;
+
+    // Get the date range based on number of days
+    let startDate: Date;
+    if (providedStartDate) {
+      // Use provided start date
+      startDate = new Date(providedStartDate);
+    } else {
+      // Default to TODAY (not Sunday of current week)
+      startDate = new Date();
+    }
+    
     const endDate = new Date(startDate);
-    endDate.setDate(startDate.getDate() + 6);
+    endDate.setDate(startDate.getDate() + (days - 1));
 
     // Prepare recipe names for Gemini
     const recipeTitles = Array.isArray(recipes)
@@ -37,10 +51,10 @@ export async function POST(request: NextRequest) {
     }
 
     const service = getGeminiService();
-    const mealPlanText = await service.generateMealPlan(seedRecipes);
+    const mealPlanText = await service.generateMealPlan(seedRecipes, days);
 
     // Parse the meal plan text and structure it
-    const mealPlan = parseMealPlanText(mealPlanText, startDate, endDate);
+    const mealPlan = parseMealPlanText(mealPlanText, startDate, endDate, days);
 
     // Save meal plan to database
     const saveResponse = await fetch(`${request.nextUrl.origin}/api/meal-mate/meal-plans`, {
@@ -75,13 +89,13 @@ export async function POST(request: NextRequest) {
   }
 }
 
-function parseMealPlanText(mealPlanText: string, startDate: Date, endDate: Date) {
+function parseMealPlanText(mealPlanText: string, startDate: Date, endDate: Date, numberOfDays: number = 7) {
   const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
   
   // Split the meal plan by days
   const lines = mealPlanText.split('\n').filter(line => line.trim());
   
-  const days = Array.from({ length: 7 }, (_, i) => {
+  const days = Array.from({ length: numberOfDays }, (_, i) => {
     const date = new Date(startDate);
     date.setDate(startDate.getDate() + i);
     
